@@ -1,0 +1,2 @@
+COMPONENT=NuclearPlantAppC
+include $(MAKERULES)
