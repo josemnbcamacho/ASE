@@ -13,14 +13,16 @@ implementation {
 	}
 
 	event void Timer0.fired() {
-		RadioInterface.sendData(10, 10, 10);
+		
 	}
 	
 	event void RadioInterface.sendDone(message_t* msg, error_t error) {
 	}
 
-	event message_t* RadioInterface.receiveCollect(message_t* msg, void* payload, uint8_t len) {
+	event void RadioInterface.receiveData(uint16_t nodeid, uint16_t radiation, uint16_t temperature, uint16_t smoke) {
 		dbg("Receive", "Received");
-		return msg;
+	}
+
+	event void RadioInterface.receiveDiffuse(uint16_t tMeasure) {
 	}
 }
