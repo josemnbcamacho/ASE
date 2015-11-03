@@ -11,6 +11,8 @@ implementation {
 	components new AMSenderC(RadioId);
 	components new AMReceiverC(RadioId);
 	components new RadioP();
+	components new QueueC(ParentCandidate, MAX_JOINRESPONSES);
+	components new TimerMilliC();
 	
 	RadioInterface = RadioP;
 
@@ -19,4 +21,6 @@ implementation {
 	RadioP.AMSend -> AMSenderC;
 	RadioP.AMControl -> ActiveMessageC;
 	RadioP.Receive -> AMReceiverC;
+	RadioP.Queue -> QueueC;
+	RadioP.MilliTimer -> TimerMilliC;
 }

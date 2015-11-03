@@ -7,6 +7,8 @@ generic module RadioP()
 		interface Packet;
 		interface AMPacket;
 		interface SplitControl as AMControl;
+		interface Queue<ParentCandidate>;
+		interface Timer<TMilli> as MilliTimer;
 	}
 }
 
@@ -16,6 +18,10 @@ implementation
 	bool locked = FALSE;
 	am_addr_t parentaddr = 0x0000;
 	uint16_t nhops = 0;
+	uint8_t diffid = 0;
+	uint16_t currentTMeasure;
+
+	bool collectingJoins;
 
 	command error_t RadioInterface.sendDiffuse(uint16_t tMeasure) {
 		if (locked) {
@@ -28,7 +34,7 @@ implementation
 			}
 
 			dm->tMeasure = tMeasure;
-			dm->messageType = 1;
+			dm->diffid = diffid + 1;
 			if (call AMSend.send(AM_BROADCAST_ADDR, &packet, sizeof(DiffuseMessage)) == SUCCESS) {
 				dbg("Radio", "RadioP: diffuse message sent. tMeasure=%hu\n", tMeasure);	
 				locked = TRUE;
@@ -90,44 +96,75 @@ implementation
 	event void AMSend.sendDone(message_t* msg, error_t error) {
 	}
 
-	event message_t* Receive.receive(message_t* msg, void* payload, uint8_t len) {
-		if(len == sizeof(JoinMessage)) {
-			if (locked) {
-				dbg("Radio", "RadioP: join response message failed\n");
-				return msg;
+	event void MilliTimer.fired() {
+		if (collectingJoins) {
+			ParentCandidate bestCandidate;
+			collectingJoins = FALSE;
+			bestCandidate.nhops = MAX_NHOPS;
+			while (!(call Queue.empty())) {
+				ParentCandidate head = call Queue.dequeue();
+				if (head.nhops < bestCandidate.nhops)
+					bestCandidate = head;
 			}
-			else {
-				JoinResponseMessage* jrm = (JoinResponseMessage*)call Packet.getPayload(&packet, sizeof(JoinResponseMessage));
-				if (jrm == NULL) {
+			parentaddr = bestCandidate.addr;
+			nhops = bestCandidate.nhops;
+			currentTMeasure = bestCandidate.tMeasure;
+		}
+	}
+
+	event message_t* Receive.receive(message_t* msg, void* payload, uint8_t len) {
+		if (len == sizeof(JoinMessage)) {
+			JoinMessage* jm = (JoinMessage*) payload;
+			if (jm->messageType == 1) { // its an JoinMessage
+				if (locked) {
 					dbg("Radio", "RadioP: join response message failed\n");
 					return msg;
 				}
+				else {
+					JoinResponseMessage* jrm = (JoinResponseMessage*)call Packet.getPayload(&packet, sizeof(JoinResponseMessage));
+					if (jrm == NULL) {
+						dbg("Radio", "RadioP: join response message failed\n");
+						return msg;
+					}
 
-				jrm->nhops = nhops;
-				jrm->messageType = 0;
-				if (call AMSend.send(call AMPacket.address(), &packet, sizeof(JoinResponseMessage)) == SUCCESS) {
-					dbg("Radio", "RadioP: join response message, nhops=%hu\n", nhops);	
-					locked = TRUE;
-					return msg;
+					jrm->nhops = nhops;
+					jrm->diffid = diffid;
+					jrm->tMeasure = currentTMeasure;
+					if (call AMSend.send(call AMPacket.address(), &packet, sizeof(JoinResponseMessage)) == SUCCESS) {
+						dbg("Radio", "RadioP: join response message, nhops=%hu\n", nhops);	
+						locked = TRUE;
+						return msg;
+					}
 				}
-			}
-		} else if(len == sizeof(JoinResponseMessage)) {
-			JoinResponseMessage* jrm = (JoinResponseMessage*)payload;
-			if(jrm->messageType == 0) {
-				// TODO: Timer collecting join messages
 			} else {
-				DiffuseMessage* dm = (DiffuseMessage*)payload;
-				if(call AMPacket.address() != parentaddr) { 							// if it's not from the parent the message must be ignored
-					dbg("RadioDBG", "RadioP: diffuse message is not for this node\n");
-					return msg;
-				}
+				
+			}
+		} else if (len == sizeof(JoinResponseMessage)) {
+			JoinResponseMessage* jrm = (JoinResponseMessage*) payload;
+			
+			if (!collectingJoins) {
+				call MilliTimer.startOneShot(TIMER_JOIN_COLLECT);
+				collectingJoins = TRUE;
+			}
+
+			if (call Queue.size() < call Queue.maxSize()) {
+				ParentCandidate parent;
+				parent.addr = call AMPacket.address();
+				parent.nhops = jrm->nhops;
+				parent.tMeasure = jrm->tMeasure;
+				call Queue.enqueue(parent);
+			}
+		} else if (len == sizeof(DiffuseMessage)) {
+			DiffuseMessage* dm = (DiffuseMessage*) payload;
+			if ((diffid > 245 && (dm->diffid > diffid || dm->diffid < 10))
+					|| (dm->diffid > diffid && dm->diffid < diffid+10)) {
+				diffid = dm->diffid;
 				signal RadioInterface.receiveDiffuse(dm->tMeasure);
 				// TODO: set timer for failure
 				if (locked) {
 					dbg("Radio", "RadioP: diffuse message passing failed\n");
 					return msg;
-				}
-				else {
+				} else {
 					DiffuseMessage* dmessage = (DiffuseMessage*)call Packet.getPayload(&packet, sizeof(DiffuseMessage));
 					if (dmessage == NULL) {
 						dbg("Radio", "RadioP: diffuse message passing failed\n");
@@ -141,9 +178,12 @@ implementation
 						return msg;
 					}
 				}
+			} else {
+				dbg("RadioDBG", "RadioP: diffuse message out of order, diffid=%hu, msgdiffid=%hu\n", diffid, dm->diffid);
+				return msg;
 			}
 		} else if (len == sizeof(CollectMessage)) {
-			if(TOS_NODE_ID == 0) {
+			if (TOS_NODE_ID == 0) {
 				CollectMessage* cm = (CollectMessage*)payload;
 				signal RadioInterface.receiveData(cm->nodeid, cm->radiation, cm->temperature, cm->smoke);
 			} else {
