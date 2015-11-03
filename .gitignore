@@ -2,3 +2,4 @@ simbuild
 _TOSSIMmodule.so
 app.xml
 TOSSIM.py
+*.pyc

@@ -9,6 +9,8 @@ generic module RadioP()
 		interface SplitControl as AMControl;
 		interface Queue<ParentCandidate>;
 		interface Timer<TMilli> as MilliTimer;
+
+		interface NuclearPlantInterface as NuclearPlant;
 	}
 }
 
@@ -19,9 +21,15 @@ implementation
 	am_addr_t parentaddr = 0x0000;
 	uint16_t nhops = 0;
 	uint8_t diffid = 0;
-	uint16_t currentTMeasure;
 
-	bool collectingJoins;
+	bool collectingJoins = FALSE;
+	bool awaitingACK = FALSE;
+
+	am_addr_t pendingACK = 0x0000;
+
+	command void RadioInterface.startRadio() {
+		call AMControl.start();
+	}
 
 	command error_t RadioInterface.sendDiffuse(uint16_t tMeasure) {
 		if (locked) {
@@ -66,6 +74,7 @@ implementation
 				return SUCCESS;
 			}
 		}
+		return FAIL;
 	}
 
 	command error_t RadioInterface.sendJoin() {
@@ -87,13 +96,50 @@ implementation
 				return SUCCESS;
 			}
 		}
+		return FAIL;
 	}
 
 	event void AMControl.startDone(error_t err) {
+		if (err == SUCCESS) {
+			if (TOS_NODE_ID != 0) {
+				call RadioInterface.sendJoin();
+			} else {
+				call NuclearPlant.startCollect();
+			}
+			dbg("Radio", "RadioP started\n");	
+		}
+		else {
+			call AMControl.start();
+		}
 	}
+
 	event void AMControl.stopDone(error_t err) {
+		// do nothing
 	}
+
 	event void AMSend.sendDone(message_t* msg, error_t error) {
+		if (msg ==  &packet) {
+			locked = FALSE;
+			if ((call Packet.payloadLength(msg)) == sizeof(CollectMessage)) { // we sent a collect packet
+				signal RadioInterface.sendDataDone();
+			}
+
+			if (pendingACK != 0x0000) {
+				AckMessage* ack = (AckMessage*)call Packet.getPayload(&packet, sizeof(AckMessage));
+				if (ack == NULL) {
+					dbg("RadioDebug", "RadioP: sending ack failed\n");
+				}
+
+				ack->messageType = 0;
+				if (call AMSend.send(pendingACK, &packet, sizeof(AckMessage)) == SUCCESS) {
+					dbg("RadioDebug", "RadioP: sending ack\n");	
+					locked = TRUE;
+					pendingACK = 0x0000;
+				} else {
+					dbg("RadioDebug", "RadioP: sending ack, AMSend failed\n");
+				}
+			}
+		}
 	}
 
 	event void MilliTimer.fired() {
@@ -108,7 +154,12 @@ implementation
 			}
 			parentaddr = bestCandidate.addr;
 			nhops = bestCandidate.nhops;
-			currentTMeasure = bestCandidate.tMeasure;
+			call NuclearPlant.setTMeasure(bestCandidate.tMeasure);
+			call NuclearPlant.startCollect();
+		} else if (awaitingACK) {
+			awaitingACK = FALSE;
+			call NuclearPlant.haltSendData();
+			call RadioInterface.sendJoin();
 		}
 	}
 
@@ -116,6 +167,7 @@ implementation
 		if (len == sizeof(JoinMessage)) {
 			JoinMessage* jm = (JoinMessage*) payload;
 			if (jm->messageType == 1) { // its an JoinMessage
+				// TODO: Timer to resend message
 				if (locked) {
 					dbg("Radio", "RadioP: join response message failed\n");
 					return msg;
@@ -129,22 +181,22 @@ implementation
 
 					jrm->nhops = nhops;
 					jrm->diffid = diffid;
-					jrm->tMeasure = currentTMeasure;
+					jrm->tMeasure = call NuclearPlant.getTMeasure();
 					if (call AMSend.send(call AMPacket.address(), &packet, sizeof(JoinResponseMessage)) == SUCCESS) {
 						dbg("Radio", "RadioP: join response message, nhops=%hu\n", nhops);	
 						locked = TRUE;
 						return msg;
 					}
 				}
-			} else {
-				
+			} else { // its an Ack
+				call MilliTimer.stop();
 			}
 		} else if (len == sizeof(JoinResponseMessage)) {
 			JoinResponseMessage* jrm = (JoinResponseMessage*) payload;
 			
 			if (!collectingJoins) {
-				call MilliTimer.startOneShot(TIMER_JOIN_COLLECT);
 				collectingJoins = TRUE;
+				call MilliTimer.startOneShot(TIMER_JOIN_COLLECT);
 			}
 
 			if (call Queue.size() < call Queue.maxSize()) {
@@ -160,7 +212,7 @@ implementation
 					|| (dm->diffid > diffid && dm->diffid < diffid+10)) {
 				diffid = dm->diffid;
 				signal RadioInterface.receiveDiffuse(dm->tMeasure);
-				// TODO: set timer for failure
+				// TODO: Timer to resend message
 				if (locked) {
 					dbg("Radio", "RadioP: diffuse message passing failed\n");
 					return msg;
@@ -179,7 +231,7 @@ implementation
 					}
 				}
 			} else {
-				dbg("RadioDBG", "RadioP: diffuse message out of order, diffid=%hu, msgdiffid=%hu\n", diffid, dm->diffid);
+				dbg("RadioDebug", "RadioP: diffuse message out of order, diffid=%hu, msgdiffid=%hu\n", diffid, dm->diffid);
 				return msg;
 			}
 		} else if (len == sizeof(CollectMessage)) {
@@ -187,22 +239,26 @@ implementation
 				CollectMessage* cm = (CollectMessage*)payload;
 				signal RadioInterface.receiveData(cm->nodeid, cm->radiation, cm->temperature, cm->smoke);
 			} else {
-				// TODO: Timer for acks and send failures
+				awaitingACK = TRUE;
+				call MilliTimer.startOneShot(TIME_FAILURE_ACK); // start failure timer
+				// TODO: Timer to resend message
 				if (locked) {
 					dbg("Radio", "RadioP: collect message passing failed\n");
 					return msg;
 				}
 				else {
+					am_addr_t pendingACKAddr = call AMPacket.address();
 					CollectMessage* cm = (CollectMessage*)call Packet.getPayload(&packet, sizeof(CollectMessage));
 					if (cm == NULL) {
 						dbg("Radio", "RadioP: collect message passing failed\n");
 						return msg;
 					}
-
+					
 					memcpy(cm, payload, sizeof(CollectMessage));
 					if (call AMSend.send(parentaddr, &packet, sizeof(CollectMessage)) == SUCCESS) {
 						dbg("Radio", "RadioP: collect message passing\n");	
 						locked = TRUE;
+						pendingACK = pendingACKAddr;
 						return msg;
 					}
 				}

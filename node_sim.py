@@ -3,6 +3,7 @@
 from TOSSIM import *
 import cmd
 
+'''
 class HelloWorld(cmd.Cmd):
 	"""Simple command processor example."""
 	def do_greet(self, person):
@@ -20,3 +21,16 @@ class HelloWorld(cmd.Cmd):
 if __name__ == '__main__':
 	HelloWorld().cmdloop()
 	t = Tossim([])
+'''
+
+import sys
+t = Tossim([])
+t.addChannel("Boot", sys.stdout)
+t.addChannel("Collection", sys.stdout)
+t.addChannel("Receive", sys.stdout)
+t.addChannel("Radio", sys.stdout)
+t.addChannel("RadioDebug", sys.stdout)
+server = t.getNode(0)
+server.bootAtTime(0)
+
+t.runNextEvent()

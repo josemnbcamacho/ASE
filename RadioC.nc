@@ -4,6 +4,7 @@ generic configuration RadioC(radio_id_t RadioId) {
 	provides {
 		interface RadioInterface;
 	}
+	uses interface NuclearPlantInterface as App;
 }
 
 implementation {
@@ -14,6 +15,8 @@ implementation {
 	components new QueueC(ParentCandidate, MAX_JOINRESPONSES);
 	components new TimerMilliC();
 	
+	RadioP.NuclearPlant = App;
+
 	RadioInterface = RadioP;
 
 	RadioP.Packet -> AMSenderC;
