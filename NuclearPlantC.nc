@@ -57,7 +57,7 @@ implementation {
 	}
 
 	event void RadioInterface.receiveData(uint16_t nodeid, uint16_t radiation, uint16_t temperature, uint16_t smoke) {
-		dbg("Receive", "Received\n");
+		dbg("Receive", "Received %hu %hu %hu %hu\n", nodeid, radiation, temperature, smoke);
 	}
 
 	event void RadioInterface.receiveDiffuse(uint16_t tMeasure) {
