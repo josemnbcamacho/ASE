@@ -14,6 +14,7 @@ implementation {
 	components new RadioP();
 	components new QueueC(ParentCandidate, MAX_JOINRESPONSES);
 	components new QueueC(MessageData, MAX_DATAQUEUE) as OutQueue;
+	components new QueueC(MessageData, MAX_DATAQUEUE) as PriorityQueue;
 	components new TimerMilliC();
 	
 	RadioP.NuclearPlant = App;
@@ -27,5 +28,6 @@ implementation {
 	RadioP.Receive -> AMReceiverC;
 	RadioP.Queue -> QueueC;
 	RadioP.OutQueue -> OutQueue;
+	RadioP.PriorityQueue -> PriorityQueue;
 	RadioP.MilliTimer -> TimerMilliC;
 }
