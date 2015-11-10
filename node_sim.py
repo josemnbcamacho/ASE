@@ -1,30 +1,47 @@
 #!/usr/bin/env python
 
 from TOSSIM import *
+from tinyos.tossim.TossimApp import *
+from DiffuseMessage import *
 import cmd
+import sys
 
-'''
+
 class HelloWorld(cmd.Cmd):
 	"""Simple command processor example."""
-	def do_greet(self, person):
-		if person:
-			print "hi,", person
-		else:
-			print 'hi'
+	def do_run(self, number):
+		if number == '':
+			number = 1
+		for i in range(int(number)):
+			t.runNextEvent()
 	
-	def help_greet(self):
-		print '\n'.join([ 'greet [person]', 'Greet the named person',])
-	
+	def help_run(self):
+		print '\n'.join([ 'run [number]', 'Runs a number of events',])
+		
+	def do_stopnode(self, id):
+		t.getNode(int(id)).turnOff()
+		print 'Node turned off'
+		
+	def help_stopnode(self):
+		print '\n'.join([ 'stopnode [id]', 'Stop a node with a given id',])
+		
+	def do_newtmeasure(self, tMeasure):
+		#currentDiffID = int(.getVariable("RadioP.diffid").getData())
+		msg = DiffuseMessage()
+		msg.set_tMeasure(int(tMeasure))
+		msg.set_diffid(1) #(currentDiffID + 1) % 255
+		pkt = t.newPacket()
+		pkt.setData(msg.data)
+		pkt.setType(msg.get_amType())
+		pkt.setDestination(0)
+		pkt.deliverNow(0)
+		print 'New tMeasure defined'
+		
 	def do_EOF(self, line):
 		return True
 
-if __name__ == '__main__':
-	HelloWorld().cmdloop()
-	t = Tossim([])
-'''
-
-import sys
-t = Tossim([])
+n = NescApp("Unknown App", "app.xml")
+t = Tossim(n.variables.variables())
 t.addChannel("Boot", sys.stdout)
 t.addChannel("Collection", sys.stdout)
 t.addChannel("CollectionDebug", sys.stdout)
@@ -46,17 +63,17 @@ for line in noise:
   str1 = line.strip()
   if str1:
     val = int(str1)
-    for i in range(0, 3):
+    for i in range(0, 4):
       t.getNode(i).addNoiseTraceReading(val)
 
-for i in range(0, 3):
+for i in range(0, 4):
   print "Creating noise model for ",i;
   t.getNode(i).createNoiseModel()
-  
+
 
 t.getNode(0).bootAtTime(100001);
 t.getNode(1).bootAtTime(8000000008);
 t.getNode(2).bootAtTime(48000000009);
+t.getNode(3).bootAtTime(88000000009);
 
-for i in range(10000):
-  t.runNextEvent()
+HelloWorld().cmdloop()

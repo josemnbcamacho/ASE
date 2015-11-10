@@ -61,11 +61,14 @@ implementation {
 	}
 
 	event void RadioInterface.receiveDiffuse(uint16_t tMeasure) {
+		call NuclearPlantInterface.setTMeasure(tMeasure);
 	}
 
 	command void NuclearPlantInterface.startCollect() {
 		if (haltSend) {
 			haltSend = FALSE;
+			if (!(call DataQueue.empty()))
+				signal RadioInterface.sendDataDone();
 		}
 		call Timer0.startPeriodic(currentTMeasure);
 		dbg("CollectionDebug", "Timer started\n");
