@@ -3,3 +3,4 @@ _TOSSIMmodule.so
 app.xml
 TOSSIM.py
 *.pyc
+logs

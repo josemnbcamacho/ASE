@@ -24,6 +24,7 @@ implementation
 	uint16_t nhops = 0;
 	uint8_t diffid = 0;
 
+	bool sentJoin = FALSE;
 	bool collectingJoins = FALSE;
 	uint8_t awaitingACK = 0;
 
@@ -59,7 +60,7 @@ implementation
 
 	command error_t RadioInterface.sendJoin() {
 		JoinMessage jm;
-
+		parentaddr = AM_BROADCAST_ADDR;
 		jm.messageType = 1;
 		dbg("Radio", "RadioP: queueing join message\n");	
 		return call RadioInterface.sendMessage(AM_BROADCAST_ADDR, (void*)&jm, sizeof(JoinMessage));
@@ -70,6 +71,7 @@ implementation
 			if (TOS_NODE_ID != 0) {
 				call RadioInterface.sendJoin();
 			} else {
+				parentaddr = 0x0000;
 				call NuclearPlant.startCollect();
 			}
 			dbg("Radio", "RadioP started\n");	
@@ -85,20 +87,28 @@ implementation
 
 	event void AMSend.sendDone(message_t* msg, error_t error) {
 		if (msg ==  &packet) {
+			uint8_t len = (call Packet.payloadLength(msg));
 			sendLocked = FALSE;
 			dbg("RadioDebug", "RadioP: sendDone\n");
-			
-			if ((call Packet.payloadLength(msg)) == sizeof(CollectMessage)) { // we sent a collect packet
-				awaitingACK = awaitingACK + 1;
-				if (awaitingACK == 1)
+			if (len == sizeof(CollectMessage)) { // we sent a collect packet
+				if (awaitingACK == 0) {
+					awaitingACK = 3;
 					call MilliTimer.startOneShot(TIME_FAILURE_ACK); // start failure timer
-				signal RadioInterface.sendDataDone();
-			}
-			
+				}
+			} else if (len == sizeof(JoinMessage) && ((JoinMessage*)call Packet.getPayload(msg, len))->messageType == 1) {
+				sentJoin = TRUE;
+				call MilliTimer.startOneShot(TIME_FAILURE_JOIN);
+				}
+
+			if (sentJoin || collectingJoins || parentaddr == AM_BROADCAST_ADDR)
+				return;
 			if (call PriorityQueue.size() > 0)
 				call RadioInterface.dispatch(call PriorityQueue.dequeue());
 			else if (call OutQueue.size() > 0 && awaitingACK == 0) {
-				call RadioInterface.dispatch(call OutQueue.dequeue());
+				MessageData data = call OutQueue.head();
+				if (data.len != sizeof(CollectMessage))
+					call OutQueue.dequeue();
+				call RadioInterface.dispatch(data);
 			} 
 		} else {
 			dbg("RadioDebug", "RadioP: something wierd happened\n");
@@ -113,7 +123,10 @@ implementation
 	}
 
 	event void MilliTimer.fired() {
-		if (collectingJoins) {
+		if (sentJoin) {
+			sentJoin = FALSE;
+			call RadioInterface.sendJoin();
+		} if (collectingJoins) {
 			ParentCandidate bestCandidate;
 			collectingJoins = FALSE;
 			bestCandidate.nhops = MAX_NHOPS;
@@ -130,10 +143,15 @@ implementation
 		} else if (awaitingACK) {
 			dbg("RadioDebug", "RadioP: failed to receive ack\n");
 			awaitingACK = awaitingACK - 1;
-			if (awaitingACK > 0)
-					call MilliTimer.startOneShot(TIME_FAILURE_ACK);
-			call NuclearPlant.haltSendData();
-			call RadioInterface.sendJoin();
+			if (awaitingACK > 0) {
+				call MilliTimer.startOneShot(TIME_FAILURE_ACK);
+				if (!sendLocked)
+					call RadioInterface.dispatch(call OutQueue.head());
+			} else {
+				dbg("RadioDebug", "RadioP: 3 ack failures!\n");
+				call NuclearPlant.haltSendData();
+				call RadioInterface.sendJoin();
+			}
 		}
 	}
 
@@ -143,6 +161,10 @@ implementation
 			JoinMessage* jm = (JoinMessage*) payload;
 			if (jm->messageType == 1) { // its an JoinMessage
 				JoinResponseMessage jrm;
+				if (parentaddr == AM_BROADCAST_ADDR && TOS_NODE_ID != 0) {
+					dbg("RadioDebug", "RadioP: can't be parent, has no parent\n");
+					return msg;
+				}
 				jrm.nhops = nhops;
 				jrm.diffid = diffid;
 				jrm.tMeasure = call NuclearPlant.getTMeasure();
@@ -151,16 +173,23 @@ implementation
 				dbg("Radio", "RadioP: queueing join response message, nhops=%hu\n", nhops);
 				call RadioInterface.sendMessage(call AMPacket.source(msg), (void*)&jrm, sizeof(JoinResponseMessage));
 			} else { // its an Ack
+				MessageData data = call OutQueue.dequeue();
+				CollectMessage* collectMsg = (CollectMessage*)&data.data;
 				dbg("RadioDebug", "RadioP: received ack, %hu\n", awaitingACK);
-				awaitingACK = awaitingACK - 1;
+				awaitingACK = 0;
 				call MilliTimer.stop();
-				if (awaitingACK > 0)
-					call MilliTimer.startOneShot(TIME_FAILURE_ACK);
-				
+				if (collectMsg->nodeid == TOS_NODE_ID)
+					signal RadioInterface.sendDataDone();
+
+				if (sentJoin || collectingJoins)
+					return msg;
 				if (call PriorityQueue.size() > 0 && !sendLocked) {
 					call RadioInterface.dispatch(call PriorityQueue.dequeue());
 				} else if (call OutQueue.size() > 0 && !sendLocked) {
-					call RadioInterface.dispatch(call OutQueue.dequeue());
+					MessageData newData = call OutQueue.head();
+					if (newData.len != sizeof(CollectMessage))
+						call OutQueue.dequeue();
+					call RadioInterface.dispatch(newData);
 				}
 			}
 		} else if (len == sizeof(JoinResponseMessage)) {
@@ -168,6 +197,8 @@ implementation
 			
 			dbg("RadioDebug", "RadioP: received join response message\n");
 			if (!collectingJoins) {
+				sentJoin = FALSE;
+				call MilliTimer.stop();
 				collectingJoins = TRUE;
 				call MilliTimer.startOneShot(TIMER_JOIN_COLLECT);
 			}
@@ -206,7 +237,10 @@ implementation
 				dbg("RadioDebug", "RadioP: queueing root ack for collection\n");
 				call RadioInterface.sendACK(call AMPacket.source(msg));
 			} else {
-
+				if (sentJoin || collectingJoins || parentaddr == AM_BROADCAST_ADDR) {
+					dbg("Radio", "RadioP: discarding message passing\n");
+					return msg;
+				}
 				// TODO: test or ignore failure..
 				dbg("Radio", "RadioP: queueing collect message passing\n");
 				call RadioInterface.sendMessage(parentaddr, payload, sizeof(CollectMessage));
@@ -242,9 +276,9 @@ implementation
 			else
 				call OutQueue.enqueue(msg);
 		} else {
-			if (!priority && awaitingACK > 0)
+			if (!priority && len == sizeof(CollectMessage))
 				call OutQueue.enqueue(msg);
-			else
+			if ((priority || awaitingACK == 0) && (!(sentJoin || collectingJoins || parentaddr == AM_BROADCAST_ADDR) || (len == sizeof(JoinMessage) && ((JoinMessage*)data)->messageType == 1)))
 				call RadioInterface.dispatch(msg);
 		}
 		return SUCCESS;
