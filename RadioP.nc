@@ -1,4 +1,4 @@
-generic module RadioP()
+module RadioP
 {
 	provides interface RadioInterface;
 	uses {

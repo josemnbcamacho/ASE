@@ -11,7 +11,7 @@ implementation {
 	components ActiveMessageC;
 	components new AMSenderC(RadioId);
 	components new AMReceiverC(RadioId);
-	components new RadioP();
+	components RadioP;
 	components new QueueC(ParentCandidate, MAX_JOINRESPONSES);
 	components new QueueC(MessageData, MAX_DATAQUEUE) as OutQueue;
 	components new QueueC(MessageData, MAX_DATAQUEUE) as PriorityQueue;
