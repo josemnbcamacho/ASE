@@ -78,7 +78,7 @@ for line in f:
     max_node = max(max_node, int(s[0]), int(s[1]))
     r.add(int(s[0]), int(s[1]), float(s[2]))
 
-noise = open("//opt/tinyos/tos/lib/tossim/noise/meyer-heavy.txt", "r")
+noise = open("meyer-heavy.txt", "r")
 for line in noise:
   str1 = line.strip()
   if str1:

@@ -4,6 +4,7 @@
 module NuclearPlantC {
 	uses interface Boot;
 	uses interface Timer<TMilli> as Timer0;
+	uses interface LocalTime<TMilli>;
 	uses interface RadioInterface;
 	uses interface Queue<SensorInformation> as DataQueue;
 	uses interface SensorInterface as TemperatureSensor;
@@ -57,6 +58,12 @@ implementation {
 	}
 
 	event void RadioInterface.receiveData(uint16_t nodeid, uint16_t radiation, uint16_t temperature, uint16_t smoke) {
+		FILE* f = fopen("collection.log", "a");
+		if (f != NULL) {
+			fprintf(f, "%ld - NodeID=%hu, Radiation=%hu Temperature=%hu Smoke=%hu\n", call LocalTime.get(), nodeid, radiation, temperature, smoke);
+			fclose(f);
+		} else
+			dbg("Receive", "Error writing to file");
 		dbg("Receive", "Received %hu %hu %hu %hu\n", nodeid, radiation, temperature, smoke);
 	}
 
